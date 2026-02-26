@@ -3,9 +3,9 @@ import * as log from './logger.js';
 
 // Models available via the /model command
 export const MODELS = [
-  { id: 'gpt-4.5',  label: 'ChatGPT 5',  description: 'Most powerful model (gpt-4.5)' },
-  { id: 'gpt-4.1',  label: 'ChatGPT 4.1', description: 'Fast and capable (gpt-4.1)' },
-  { id: 'gpt-4o',   label: 'ChatGPT 4o',  description: 'Default balanced model (gpt-4o)' },
+  { id: 'gpt-5-mini', label: 'ChatGPT 5 mini',  description: 'Latest mini model (gpt-5-mini)' },
+  { id: 'gpt-4.1',   label: 'ChatGPT 4.1',     description: 'Fast and capable (gpt-4.1)' },
+  { id: 'gpt-4o',    label: 'ChatGPT 4o',      description: 'Balanced general model (gpt-4o)' },
 ];
 
 export const DEFAULT_MODEL = 'gpt-4.1';
@@ -21,7 +21,15 @@ export class CopilotManager {
   async start() {
     log.info('Copilot', 'Starting Copilot SDK...');
 
-    this.client = new CopilotClient({ githubToken: this.token });
+    // Pass the token via GH_TOKEN env var so the Copilot CLI subprocess can
+    // pick it up through its own auth priority chain. Using useLoggedInUser: true
+    // (the default) avoids --no-auto-login, allowing the CLI to fall back to
+    // other auth sources (gh CLI, stored credentials) if needed.
+    if (this.token) {
+      process.env.GH_TOKEN = this.token;
+    }
+
+    this.client = new CopilotClient({ useLoggedInUser: true });
     await this.client.start();
     log.info('Copilot', 'SDK started');
 

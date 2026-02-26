@@ -134,11 +134,11 @@ await test('MODELS has exactly 3 entries', async () => {
   assertEqual(MODELS.length, 3);
 });
 
-await test('MODELS include gpt-4.5, gpt-4.1, and gpt-4o', async () => {
+await test('MODELS include gpt-5-mini, gpt-4.1, and gpt-4o', async () => {
   const ids = MODELS.map(m => m.id);
-  assert(ids.includes('gpt-4.5'),  'Missing gpt-4.5');
-  assert(ids.includes('gpt-4.1'),  'Missing gpt-4.1');
-  assert(ids.includes('gpt-4o'),   'Missing gpt-4o');
+  assert(ids.includes('gpt-5-mini'), 'Missing gpt-5-mini');
+  assert(ids.includes('gpt-4.1'),    'Missing gpt-4.1');
+  assert(ids.includes('gpt-4o'),     'Missing gpt-4o');
 });
 
 await test('DEFAULT_MODEL is gpt-4.1', async () => {
@@ -179,12 +179,12 @@ if (!liveToken) {
       console.log(`       → "${content.slice(0, 120).replace(/\n/g, '↵')}"`);
     });
 
-    await test('setModel switches to gpt-4.5', async () => {
-      // gpt-4.5 / gpt-4o may return 402 if the subscription does not include them;
+    await test('setModel switches to gpt-5-mini', async () => {
+      // gpt-5-mini / gpt-4o may return 402 if the subscription does not include them;
       // we verify the call either succeeds or throws cleanly (not a crash)
       let ok = false;
       try {
-        await manager.setModel('gpt-4.5');
+        await manager.setModel('gpt-5-mini');
         const res = await manager.send('Reply with exactly the single word: pong');
         ok = res?.data?.content?.length > 0;
       } catch (err) {

@@ -1,12 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
-// GitHub OAuth App client_id used for Copilot device flow authentication.
-// This is the same client_id used by the official GitHub Copilot Neovim plugin,
-// which is widely compatible with Copilot's token exchange.
+// GitHub OAuth App client_id for device flow.
+// Using the GitHub Copilot for Neovim client (widely used for Copilot access).
 const CLIENT_ID = 'Iv1.b507a08c87ecfe98';
-const SCOPE = 'read:user';
+const SCOPE = 'user read:org gist';
 
 const AUTH_FILE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,6 +32,20 @@ export function clearToken() {
   try { fs.unlinkSync(AUTH_FILE); } catch {}
 }
 
+/** Use the gh CLI's stored token if available — it always has the right scopes. */
+function getGhCliToken() {
+  try {
+    const token = execSync('gh auth token', {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
 async function githubPost(url, body) {
   const res = await fetch(url, {
     method: 'POST',
@@ -52,14 +66,24 @@ export async function deviceLogin() {
 
   if (!device_code) throw new Error('Failed to obtain device code from GitHub');
 
-  // Print instructions clearly
-  const line = '─'.repeat(44);
-  console.log(`\n┌${line}┐`);
-  console.log('│        GitHub Authentication Required          │');
-  console.log(`├${line}┤`);
-  console.log(`│  Visit:     ${verification_uri.padEnd(30)} │`);
-  console.log(`│  Enter code: ${user_code.padEnd(29)} │`);
-  console.log(`└${line}┘\n`);
+  // Print instructions with dynamic box sizing
+  const INNER = Math.max(verification_uri.length, user_code.length) + 18;
+  const dashes = '─'.repeat(INNER);
+  const center = (text) => {
+    const pad = INNER - text.length;
+    return '│' + ' '.repeat(Math.floor(pad / 2)) + text + ' '.repeat(Math.ceil(pad / 2)) + '│';
+  };
+  const left = (prefix, value) => {
+    const text = prefix + value;
+    return '│ ' + text + ' '.repeat(INNER - text.length - 2) + ' │';
+  };
+
+  console.log(`\n┌${dashes}┐`);
+  console.log(center('GitHub Authentication Required'));
+  console.log(`├${dashes}┤`);
+  console.log(left('Visit:      ', verification_uri));
+  console.log(left('Enter code: ', user_code));
+  console.log(`└${dashes}┘\n`);
 
   // Step 2 – poll until the user completes auth
   let pollMs = (interval || 5) * 1000;
@@ -81,7 +105,7 @@ export async function deviceLogin() {
     }
 
     switch (data.error) {
-      case 'authorization_pending': break; // keep polling
+      case 'authorization_pending': break;
       case 'slow_down': pollMs = (data.interval || pollMs / 1000 + 5) * 1000; break;
       case 'access_denied': throw new Error('Access denied – user cancelled');
       case 'expired_token': throw new Error('Device code expired – restart the bot to try again');
@@ -93,16 +117,29 @@ export async function deviceLogin() {
 }
 
 /**
- * Returns a valid GitHub token, running the device flow if one isn't stored.
- * Priority: COPILOT_GITHUB_TOKEN env var → stored token file → device flow
+ * Returns a valid GitHub token.
+ *
+ * Priority:
+ *   1. COPILOT_GITHUB_TOKEN env var (explicit override)
+ *   2. Stored .cobot-auth.json token (from a previous run)
+ *   3. gh CLI token (`gh auth token`) — used in Codespaces and gh-authenticated machines
+ *   4. GitHub device flow (prompts the user to authorize in a browser)
  */
 export async function ensureAuthenticated() {
-  if (process.env.COPILOT_GITHUB_TOKEN) {
-    return process.env.COPILOT_GITHUB_TOKEN;
-  }
+  // 1. Explicit env var
+  if (process.env.COPILOT_GITHUB_TOKEN) return process.env.COPILOT_GITHUB_TOKEN;
 
+  // 2. Stored token from previous auth
   const stored = loadStoredToken();
   if (stored) return stored;
 
+  // 3. gh CLI (no user interaction needed — token is already there)
+  const ghToken = getGhCliToken();
+  if (ghToken) {
+    saveToken(ghToken);
+    return ghToken;
+  }
+
+  // 4. Interactive device flow
   return deviceLogin();
 }
