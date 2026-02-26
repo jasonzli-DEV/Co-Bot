@@ -1,0 +1,8 @@
+node_modules/
+.env
+.cobot-auth.json
+*.log
+
+# Test helper files (not needed in production)
+test/_*.cjs
+test/_*.mjs

@@ -1,0 +1,21 @@
+{
+  "name": "co-bot",
+  "version": "2.0.0",
+  "description": "Discord bot powered by GitHub Copilot with device flow authentication and model selection",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node test/test.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@github/copilot-sdk": "^0.1.20",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
