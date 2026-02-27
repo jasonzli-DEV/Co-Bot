@@ -1,7 +1,7 @@
 /**
  * Co-Bot test suite
  *
- * Tests auth module, Copilot SDK integration, and utility logic.
+ * Tests auth module, Copilot API integration, and utility logic.
  * Run:  node test/test.js
  *
  * For live API tests, set COPILOT_GITHUB_TOKEN or have `gh auth token` available.
@@ -59,7 +59,16 @@ function splitMessage(content, limit = 2000) {
 
 console.log('\n── Auth module ───────────────────────────────────────────────────────────\n');
 
-const { ensureAuthenticated } = await import('../src/auth.js');
+const { ensureAuthenticated, saveToken, loadStoredToken, clearToken } = await import('../src/auth.js');
+
+await test('saveToken / loadStoredToken / clearToken round-trip', async () => {
+  clearToken();
+  assert(loadStoredToken() === null, 'Expected null before saving');
+  saveToken('test_token_12345');
+  assertEqual(loadStoredToken(), 'test_token_12345');
+  clearToken();
+  assert(loadStoredToken() === null, 'Expected null after clearing');
+});
 
 await test('ensureAuthenticated returns COPILOT_GITHUB_TOKEN when set', async () => {
   const orig = process.env.COPILOT_GITHUB_TOKEN;
@@ -73,6 +82,7 @@ await test('ensureAuthenticated returns COPILOT_GITHUB_TOKEN when set', async ()
 await test('ensureAuthenticated returns gh CLI token when no env var is set', async () => {
   const origEnv = process.env.COPILOT_GITHUB_TOKEN;
   delete process.env.COPILOT_GITHUB_TOKEN;
+  clearToken(); // ensure stored token doesn't interfere
 
   let ghToken = null;
   try { ghToken = execSync('gh auth token', { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch {}
@@ -153,15 +163,15 @@ await test('Every model entry has id, label, and description', async () => {
 
 console.log('\n── Live Copilot API ──────────────────────────────────────────────────────\n');
 
-// Use COPILOT_GITHUB_TOKEN, or fall back to gh auth token (same as what the bot uses)
-let liveToken = process.env.COPILOT_GITHUB_TOKEN || null;
-if (!liveToken) {
-  try { liveToken = execSync('gh auth token', { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch {}
-}
+// Live tests require COPILOT_GITHUB_TOKEN — a token obtained from the device flow
+// (client Ov23li8tweQw6odWQebz). gh CLI tokens are NOT directly accepted by the
+// Copilot REST API; they only work via the Copilot CLI subprocess (old SDK approach).
+const liveToken = process.env.COPILOT_GITHUB_TOKEN || null;
 
 if (!liveToken) {
-  console.log('  ⚠  No token found – skipping live API tests.');
-  console.log('     Set COPILOT_GITHUB_TOKEN or run `gh auth login`, then re-run tests.\n');
+  console.log('  ⚠  COPILOT_GITHUB_TOKEN not set – skipping live API tests.');
+  console.log('     Run the bot first to complete device login, then:\n');
+  console.log('     COPILOT_GITHUB_TOKEN=<token-from-.cobot-auth.json> node test/test.js\n');
 } else {
   const { CopilotManager } = await import('../src/copilot.js');
   let manager;
