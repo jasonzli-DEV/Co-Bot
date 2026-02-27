@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import * as log from './logger.js';
-import { ensureAuthenticated, clearToken } from './auth.js';
+import { ensureAuthenticated } from './auth.js';
 import { CopilotManager } from './copilot.js';
 import { DiscordBot } from './bot.js';
 

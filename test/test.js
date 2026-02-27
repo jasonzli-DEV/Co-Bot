@@ -4,12 +4,12 @@
  * Tests auth module, Copilot SDK integration, and utility logic.
  * Run:  node test/test.js
  *
- * Requires a valid GitHub Copilot token - either in .cobot-auth.json
- * (from having run the bot and completed device login) or via COPILOT_GITHUB_TOKEN env var.
+ * For live API tests, set COPILOT_GITHUB_TOKEN or have `gh auth token` available.
  */
 
 import dotenv from 'dotenv';
 import path from 'path';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env') });
@@ -59,19 +59,9 @@ function splitMessage(content, limit = 2000) {
 
 console.log('\n── Auth module ───────────────────────────────────────────────────────────\n');
 
-const { saveToken, loadStoredToken, clearToken, ensureAuthenticated } =
-  await import('../src/auth.js');
+const { ensureAuthenticated } = await import('../src/auth.js');
 
-await test('saveToken / loadStoredToken round-trip', async () => {
-  clearToken();
-  assert(loadStoredToken() === null, 'Expected null before saving');
-  saveToken('ghp_test_token_12345');
-  assertEqual(loadStoredToken(), 'ghp_test_token_12345', 'Token mismatch after save');
-  clearToken();
-  assert(loadStoredToken() === null, 'Expected null after clearing');
-});
-
-await test('ensureAuthenticated prefers COPILOT_GITHUB_TOKEN env var', async () => {
+await test('ensureAuthenticated returns COPILOT_GITHUB_TOKEN when set', async () => {
   const orig = process.env.COPILOT_GITHUB_TOKEN;
   process.env.COPILOT_GITHUB_TOKEN = 'env_token_test';
   const token = await ensureAuthenticated();
@@ -80,15 +70,21 @@ await test('ensureAuthenticated prefers COPILOT_GITHUB_TOKEN env var', async () 
   else delete process.env.COPILOT_GITHUB_TOKEN;
 });
 
-await test('loadStoredToken returns stored value', async () => {
-  const orig = process.env.COPILOT_GITHUB_TOKEN;
+await test('ensureAuthenticated returns gh CLI token when no env var is set', async () => {
+  const origEnv = process.env.COPILOT_GITHUB_TOKEN;
   delete process.env.COPILOT_GITHUB_TOKEN;
 
-  saveToken('stored_test_token_99');
-  assertEqual(loadStoredToken(), 'stored_test_token_99');
-  clearToken();
+  let ghToken = null;
+  try { ghToken = execSync('gh auth token', { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch {}
 
-  if (orig) process.env.COPILOT_GITHUB_TOKEN = orig;
+  if (ghToken) {
+    const token = await ensureAuthenticated();
+    assertEqual(token, ghToken, 'Expected gh CLI token');
+  } else {
+    console.log('       (gh CLI not available — skipping gh token check)');
+  }
+
+  if (origEnv !== undefined) process.env.COPILOT_GITHUB_TOKEN = origEnv;
 });
 
 // ─── Message Splitting ────────────────────────────────────────────────────────
@@ -157,11 +153,15 @@ await test('Every model entry has id, label, and description', async () => {
 
 console.log('\n── Live Copilot API ──────────────────────────────────────────────────────\n');
 
-const liveToken = process.env.COPILOT_GITHUB_TOKEN || loadStoredToken();
+// Use COPILOT_GITHUB_TOKEN, or fall back to gh auth token (same as what the bot uses)
+let liveToken = process.env.COPILOT_GITHUB_TOKEN || null;
+if (!liveToken) {
+  try { liveToken = execSync('gh auth token', { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch {}
+}
 
 if (!liveToken) {
   console.log('  ⚠  No token found – skipping live API tests.');
-  console.log('     Start the bot to complete device login, then re-run tests.\n');
+  console.log('     Set COPILOT_GITHUB_TOKEN or run `gh auth login`, then re-run tests.\n');
 } else {
   const { CopilotManager } = await import('../src/copilot.js');
   let manager;

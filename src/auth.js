@@ -1,38 +1,33 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
-// GitHub OAuth App client_id for device flow.
-// Using the GitHub Copilot for Neovim client (widely used for Copilot access).
-const CLIENT_ID = 'Iv1.b507a08c87ecfe98';
-const SCOPE = 'user read:org gist';
-
-const AUTH_FILE = path.join(
+// Path to the bundled Copilot CLI binary (installed as a dependency)
+const COPILOT_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '.cobot-auth.json'
+  '..', 'node_modules', '.bin', 'copilot',
 );
 
-export function loadStoredToken() {
+// ~/.copilot/config.json stores the list of logged-in users after copilot login
+const COPILOT_CONFIG = path.join(os.homedir(), '.copilot', 'config.json');
+
+/**
+ * Returns true if the Copilot CLI already has stored credentials.
+ * The CLI writes to ~/.copilot/config.json with a non-empty logged_in_users list.
+ */
+function isCopilotLoggedIn() {
   try {
-    if (fs.existsSync(AUTH_FILE)) {
-      const { token } = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
-      return token || null;
-    }
-  } catch {}
-  return null;
+    if (!fs.existsSync(COPILOT_CONFIG)) return false;
+    const { logged_in_users } = JSON.parse(fs.readFileSync(COPILOT_CONFIG, 'utf8'));
+    return Array.isArray(logged_in_users) && logged_in_users.length > 0;
+  } catch {
+    return false;
+  }
 }
 
-export function saveToken(token) {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ token }, null, 2));
-}
-
-export function clearToken() {
-  try { fs.unlinkSync(AUTH_FILE); } catch {}
-}
-
-/** Use the gh CLI's stored token if available — it always has the right scopes. */
+/** Returns a gh CLI token if available (gh tokens are accepted by the Copilot CLI). */
 function getGhCliToken() {
   try {
     const token = execSync('gh auth token', {
@@ -46,100 +41,44 @@ function getGhCliToken() {
   }
 }
 
-async function githubPost(url, body) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+/**
+ * Runs `copilot login` interactively.
+ * The CLI handles the device flow itself: shows a URL + code, polls GitHub,
+ * and stores the token securely in ~/.copilot/ when done.
+ */
+async function runCopilotLogin() {
+  console.log('\nNo GitHub authentication found. Starting Copilot login...\n');
+  await new Promise((resolve, reject) => {
+    const proc = spawn(COPILOT_BIN, ['login'], { stdio: 'inherit' });
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`copilot login exited with code ${code}`));
+    });
+    proc.on('error', (err) => reject(new Error(`Failed to run copilot login: ${err.message}`)));
   });
-  if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
-export async function deviceLogin() {
-  // Step 1 – request a device code
-  const { device_code, user_code, verification_uri, expires_in, interval } =
-    await githubPost('https://github.com/login/device/code', {
-      client_id: CLIENT_ID,
-      scope: SCOPE,
-    });
-
-  if (!device_code) throw new Error('Failed to obtain device code from GitHub');
-
-  // Print instructions with dynamic box sizing
-  const INNER = Math.max(verification_uri.length, user_code.length) + 18;
-  const dashes = '─'.repeat(INNER);
-  const center = (text) => {
-    const pad = INNER - text.length;
-    return '│' + ' '.repeat(Math.floor(pad / 2)) + text + ' '.repeat(Math.ceil(pad / 2)) + '│';
-  };
-  const left = (prefix, value) => {
-    const text = prefix + value;
-    return '│ ' + text + ' '.repeat(INNER - text.length - 2) + ' │';
-  };
-
-  console.log(`\n┌${dashes}┐`);
-  console.log(center('GitHub Authentication Required'));
-  console.log(`├${dashes}┤`);
-  console.log(left('Visit:      ', verification_uri));
-  console.log(left('Enter code: ', user_code));
-  console.log(`└${dashes}┘\n`);
-
-  // Step 2 – poll until the user completes auth
-  let pollMs = (interval || 5) * 1000;
-  const expiresAt = Date.now() + (expires_in || 900) * 1000;
-
-  while (Date.now() < expiresAt) {
-    await new Promise(r => setTimeout(r, pollMs));
-
-    const data = await githubPost('https://github.com/login/oauth/access_token', {
-      client_id: CLIENT_ID,
-      device_code,
-      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-    });
-
-    if (data.access_token) {
-      saveToken(data.access_token);
-      console.log('Authentication successful! Token saved.\n');
-      return data.access_token;
-    }
-
-    switch (data.error) {
-      case 'authorization_pending': break;
-      case 'slow_down': pollMs = (data.interval || pollMs / 1000 + 5) * 1000; break;
-      case 'access_denied': throw new Error('Access denied – user cancelled');
-      case 'expired_token': throw new Error('Device code expired – restart the bot to try again');
-      default: throw new Error(`Unexpected auth error: ${data.error}`);
-    }
-  }
-
-  throw new Error('Authentication timed out');
 }
 
 /**
- * Returns a valid GitHub token.
+ * Resolves to a valid GitHub token, or null when the Copilot CLI manages auth itself.
  *
  * Priority:
- *   1. COPILOT_GITHUB_TOKEN env var (explicit override)
- *   2. Stored .cobot-auth.json token (from a previous run)
- *   3. gh CLI token (`gh auth token`) — used in Codespaces and gh-authenticated machines
- *   4. GitHub device flow (prompts the user to authorize in a browser)
+ *   1. COPILOT_GITHUB_TOKEN env var — fine-grained PAT with "Copilot Requests" permission
+ *   2. gh CLI token (`gh auth token`) — accepted by the Copilot CLI
+ *   3. Previously stored copilot login credentials (~/.copilot/config.json)
+ *   4. Interactive `copilot login` device flow (one-time per machine/container)
  */
 export async function ensureAuthenticated() {
-  // 1. Explicit env var
+  // 1. Explicit fine-grained PAT
   if (process.env.COPILOT_GITHUB_TOKEN) return process.env.COPILOT_GITHUB_TOKEN;
 
-  // 2. Stored token from previous auth
-  const stored = loadStoredToken();
-  if (stored) return stored;
-
-  // 3. gh CLI (no user interaction needed — token is already there)
+  // 2. gh CLI token (automatically available in Codespaces, GitHub Actions, etc.)
   const ghToken = getGhCliToken();
-  if (ghToken) {
-    saveToken(ghToken);
-    return ghToken;
-  }
+  if (ghToken) return ghToken;
 
-  // 4. Interactive device flow
-  return deviceLogin();
+  // 3. Already logged in via a previous `copilot login` run
+  if (isCopilotLoggedIn()) return null; // CLI will find its own stored credentials
+
+  // 4. Interactive device flow via the Copilot CLI
+  await runCopilotLogin();
+  return null; // CLI will find the credentials it just stored
 }
